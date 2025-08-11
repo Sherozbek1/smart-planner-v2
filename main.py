@@ -31,7 +31,7 @@ from db_helpers import (
     admin_get_groups_page, admin_toggle_group_approved, update_task_reminders_sent, set_clan_image,
     export_users, export_tasks, export_clans, export_members, export_apps, set_user_username, award_xp_with_cap,
     list_clan_members, remove_member_from_clan, get_clans_xp_leaderboard, get_clans_xp_leaderboard_page, get_tasks_for_reminder_window,
-    bulk_update_task_reminders_sent,
+    bulk_update_task_reminders_sent
 )
 from utils.parsing import parse_tasks_text, parse_natural_deadline, deadline_for_scope
 
@@ -356,7 +356,7 @@ async def _show_tasks_list(msg_or_call, uid: str, filt: str):
     user_tasks_view[uid] = {"filter": filt, "snapshot": snapshot}
 
     name = dict(FILTERS)[filt]
-    if not tasks:
+    if not tasks:   
         text = f"📝 <b>Your Tasks</b> — {name}\n\nNothing here yet. Try another filter."
     else:
         blocks = _render_task_blocks(tasks)
@@ -434,16 +434,23 @@ def _render_task_blocks(tasks):
 
 # — Handlers —  
 @dp.message(Command("start"))
-async def start_cmd(msg: Message):
-    await get_or_create_user(
-        str(msg.from_user.id), msg.from_user.first_name, username=msg.from_user.username or ""
-    )
-    # keep username fresh if they changed it
-    await set_user_username(str(msg.from_user.id), msg.from_user.username or "")
+async def cmd_start(msg: Message):
     await msg.answer(
-        "👋 Welcome to <b>Smart Daily Planner</b>!\nTap a button to begin.",
-        reply_markup=main_kb()
+        "🚀 <b>Welcome to Smart Daily Planner V2!</b>\n"
+        "<i>Your productivity, now gamified — right inside Telegram.</i>\n\n"
+        "Here’s what you can do:\n"
+        "• ✍️ <b>Add tasks</b> in plain language → <code>math homework tomorrow 9am</code>\n"
+        "• ⏰ <b>Get reminders</b> exactly on time\n"
+        "• 📋 <b>Manage & organize</b> tasks with deadlines, tags, and priorities\n"
+        "• 🏆 <b>Climb the leaderboards</b> solo or with your Study Group\n"
+        "• 🎯 <b>Earn XP & streak bonuses</b> for staying consistent\n"
+        "• 👥 <b>Join Study Groups</b> to stay productive together\n\n"
+        "💡 <i>Tip: Use</i> /help <i>anytime for quick commands & examples.</i>\n\n"
+        "Let’s get started! Tap a button below to explore ⤵️",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_kb()  # <-- Keep your existing main menu keyboard
     )
+
 @dp.message(F.text == BUTTONS["ADD"])
 async def add_task_prompt(msg: Message):
     uid = str(msg.from_user.id)

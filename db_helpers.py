@@ -6,6 +6,8 @@ from db_models import User, Task, Clan, ClanMember, ClanApplication, ClanCreatio
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.orm import selectinload
 # --- USER HELPERS ---
+from datetime import datetime, timedelta
+import pytz
 
 
 async def get_or_create_user(user_id: str, name: str = "Unknown", username: str = ""):
@@ -200,6 +202,53 @@ async def update_task_text(task_id: int, new_text: str):
         return task
     
 # --- reminders_sent persistence ---
+async def get_tasks_for_reminder_window(min_from: int, min_to: int, sent_flag: int, tz_name: str = "Asia/Tashkent"):
+    """
+    Return list of (User, Task) where:
+      - Task.status == 'pending'
+      - Task.reminders_sent == sent_flag
+      - Deadline is between [now+min_from, now+min_to) minutes
+    Deadline is stored as a string 'YYYY-MM-DD HH:MM' in local tz.
+    """
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(
+            select(Task, User)
+            .join(User, User.id == Task.user_id)
+            .where(
+                Task.status == "pending",
+                Task.reminders_sent == sent_flag,
+                Task.deadline.isnot(None),
+                Task.deadline != ""
+            )
+            .options(joinedload(Task.user))
+        )
+        rows = res.all()
+
+    tz = pytz.timezone(tz_name)
+    now = datetime.now(tz)
+    win_start = now + timedelta(minutes=min_from)
+    win_end   = now + timedelta(minutes=min_to)
+
+    pairs: list[tuple[User, Task]] = []
+    for t, u in rows:
+        try:
+            dt = tz.localize(datetime.strptime(t.deadline, "%Y-%m-%d %H:%M"))
+        except Exception:
+            continue
+        if win_start <= dt < win_end:
+            pairs.append((u, t))
+    return pairs
+
+
+async def bulk_update_task_reminders_sent(task_ids: list[int], new_val: int) -> None:
+    """Set reminders_sent = new_val for all tasks in task_ids."""
+    if not task_ids:
+        return
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            update(Task).where(Task.id.in_(task_ids)).values(reminders_sent=new_val)
+        )
+        await session.commit()
 async def update_task_reminders_sent(task_id: int, val: int) -> bool:
     from db import AsyncSessionLocal
     from db_models import Task
@@ -787,7 +836,7 @@ async def get_clans_xp_leaderboard_page(page: int = 0, per_page: int = 10, mode:
             .where(Clan.is_approved == True)
             .group_by(Clan.id)
         )
-        order_metric = desc("total_xp") if mode == "total" else desc("avg_xp")
+        order_metric = desc("total_xp") if mode == "total" else  desc("avg_xp")
         stmt = stmt.order_by(order_metric, desc(member_count), Clan.created_at.desc()).offset(page*per_page).limit(per_page)
         res = await session.execute(stmt)
         rows = res.all()   # [(Clan, member_count, total_xp, avg_xp)]
