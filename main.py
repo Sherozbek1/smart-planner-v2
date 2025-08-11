@@ -436,17 +436,11 @@ def _render_task_blocks(tasks):
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
     await msg.answer(
-        "🚀 <b>Welcome to Smart Daily Planner V2!</b>\n"
-        "<i>Your productivity, now gamified — right inside Telegram.</i>\n\n"
-        "Here’s what you can do:\n"
-        "• ✍️ <b>Add tasks</b> in plain language → <code>math homework tomorrow 9am</code>\n"
-        "• ⏰ <b>Get reminders</b> exactly on time\n"
-        "• 📋 <b>Manage & organize</b> tasks with deadlines, tags, and priorities\n"
-        "• 🏆 <b>Climb the leaderboards</b> solo or with your Study Group\n"
-        "• 🎯 <b>Earn XP & streak bonuses</b> for staying consistent\n"
-        "• 👥 <b>Join Study Groups</b> to stay productive together\n\n"
-        "💡 <i>Tip: Use</i> /help <i>anytime for quick commands & examples.</i>\n\n"
-        "Let’s get started! Tap a button below to explore ⤵️",
+        "🚀 <b>Smart Daily Planner V2</b>\n"
+        "📌 Add tasks • Get reminders • Track progress\n"
+        "🏆 Earn XP & join Study Groups\n\n"
+        "💡 Use /help for commands & tips.\n"
+        "Tap a button below to start ⤵️",
         parse_mode=ParseMode.HTML,
         reply_markup=main_kb()  # <-- Keep your existing main menu keyboard
     )
