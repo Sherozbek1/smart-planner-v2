@@ -30,7 +30,8 @@ from db_helpers import (
     update_clan_info, show_group_card_paginated, admin_get_counts, get_all_user_ids, get_user_by_username,
     admin_get_groups_page, admin_toggle_group_approved, update_task_reminders_sent, set_clan_image,
     export_users, export_tasks, export_clans, export_members, export_apps, set_user_username, award_xp_with_cap,
-    list_clan_members, remove_member_from_clan, get_clans_xp_leaderboard, get_clans_xp_leaderboard_page
+    list_clan_members, remove_member_from_clan, get_clans_xp_leaderboard, get_clans_xp_leaderboard_page, get_tasks_for_reminder_window,
+    bulk_update_task_reminders_sent,
 )
 from utils.parsing import parse_tasks_text, parse_natural_deadline, deadline_for_scope
 
@@ -71,7 +72,6 @@ user_add_scope = {}  # uid -> 'free'|'today'|'week'|'month'
 
 manage_deadline_wait = {}  # uid -> [task_ids] waiting for a single deadline value
 
-manage_select = {}  # uid -> {"action": str, "selected": set[int]}
 
 # --- Admin states ---
 admin_broadcast_wait = set()
@@ -347,10 +347,6 @@ def _filters_kb(current: str):
     kb_rows.append([InlineKeyboardButton(text="🔙 Back", callback_data="tasks_back")])
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
-def _clip(text: str, max_len: int = 64) -> str:
-    t = (text or "").strip()
-    return t if len(t) <= max_len else (t[:max_len-1] + "…")
-
 
 async def _show_tasks_list(msg_or_call, uid: str, filt: str):
     all_tasks = await get_tasks(uid)
@@ -379,13 +375,6 @@ async def _show_tasks_list(msg_or_call, uid: str, filt: str):
 
 
 
-
-
-
-
-def _clip(text: str, max_len: int = 64) -> str:
-    t = (text or "").strip()
-    return t if len(t) <= max_len else (t[:max_len-1] + "…")
 
 def _repeat_text(t):
     rep = (t.repeat or "").lower()
@@ -493,127 +482,6 @@ async def tasks_manage_choose(cb: CallbackQuery):
     manage_select[uid] = {"action": action, "selected": set()}
     await _render_select_ui(cb, uid)
     await cb.answer()
-
-def _action_name(a: str) -> str:
-    return {"done":"Mark done","delete":"Delete","prio":"Set priority","tag":"Set tag","deadline":"Set deadline"}.get(a,a)
-
-async def _get_snapshot_tasks(uid: str):
-    snapshot = (user_tasks_view.get(uid) or {}).get("snapshot", [])
-    tasks = await get_tasks(uid)
-    by_id = {t.id: t for t in tasks}
-    return [by_id[i] for i in snapshot if i in by_id]
-
-def _select_kb(uid: str, tasks, selected: set[int]):
-    rows = []
-    for idx, t in enumerate(tasks, 1):
-        mark  = "✅" if idx in selected else "⬜"
-        label = f"{mark} {idx}. {_clip(t.text, 40)}"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"sel_toggle:{idx}")])
-    rows.append([
-        InlineKeyboardButton(text="Select all", callback_data="sel_all"),
-        InlineKeyboardButton(text="Clear",      callback_data="sel_clear"),
-    ])
-    rows.append([
-        InlineKeyboardButton(text="▶️ Proceed",  callback_data="sel_go"),
-        InlineKeyboardButton(text="❌ Cancel",   callback_data="tasks_manage_cancel"),
-    ])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-async def _render_select_ui(cb_or_msg, uid: str):
-    st = manage_select.get(uid);  action = st["action"]
-    tasks = await _get_snapshot_tasks(uid)
-    title = f"🧰 <b>Manage tasks</b> — {_action_name(action)}\nTap to select items, then <b>Proceed</b>."
-    kb = _select_kb(uid, tasks, st["selected"])
-    if isinstance(cb_or_msg, Message):
-        await cb_or_msg.answer(title, parse_mode=ParseMode.HTML, reply_markup=kb)
-    else:
-        try:    await cb_or_msg.message.edit_text(title, parse_mode=ParseMode.HTML, reply_markup=kb)
-        except: await cb_or_msg.message.answer(title, parse_mode=ParseMode.HTML, reply_markup=kb)
-
-@dp.callback_query(F.data.startswith("sel_toggle:"))
-async def sel_toggle(cb: CallbackQuery):
-    uid = str(cb.from_user.id); st = manage_select.get(uid)
-    if not st: return await cb.answer()
-    idx = int(cb.data.split(":")[1])
-    (st["selected"].discard(idx) if idx in st["selected"] else st["selected"].add(idx))
-    await _render_select_ui(cb, uid); await cb.answer()
-
-@dp.callback_query(F.data == "sel_all")
-async def sel_all(cb: CallbackQuery):
-    uid = str(cb.from_user.id); st = manage_select.get(uid)
-    if not st: return await cb.answer()
-    tasks = await _get_snapshot_tasks(uid)
-    st["selected"] = set(range(1, len(tasks)+1))
-    await _render_select_ui(cb, uid); await cb.answer()
-
-@dp.callback_query(F.data == "sel_clear")
-async def sel_clear(cb: CallbackQuery):
-    uid = str(cb.from_user.id); st = manage_select.get(uid)
-    if not st: return await cb.answer()
-    st["selected"].clear()
-    await _render_select_ui(cb, uid); await cb.answer()
-
-@dp.callback_query(F.data == "sel_go")
-async def sel_go(cb: CallbackQuery):
-    uid = str(cb.from_user.id)
-    st = manage_select.pop(uid, None)
-    if not st: return await cb.answer()
-    action = st["action"]
-    view = user_tasks_view.get(uid) or {}
-    snapshot = view.get("snapshot", [])
-
-    if not st["selected"]:
-        return await cb.answer("Select at least one.", show_alert=True)
-
-    indices = sorted(st["selected"])
-    ids = [snapshot[i-1] for i in indices if 1 <= i <= len(snapshot)]
-
-    # prio / tag → ask for choice
-    if action == "prio":
-        manage_batch[uid] = {"action":"prio", "ids": ids}
-        await cb.message.answer("Choose priority for the selected task(s):", reply_markup=_batch_priority_kb()); return
-    if action == "tag":
-        manage_batch[uid] = {"action":"tag", "ids": ids}
-        await cb.message.answer("Choose a tag (or Custom) for the selected task(s):", reply_markup=_batch_tags_kb()); return
-
-    # deadline → show guide and wait for one value (you already have the text handler)
-    if action == "deadline":
-        manage_deadline_wait[uid] = ids
-        copy_block, reference = build_deadline_examples_text()
-        await cb.message.answer("⏰ Send a deadline.\nTap to copy one of these, or type your own:\n" + copy_block + "\n" + reference, parse_mode=ParseMode.HTML)
-        return
-
-    # delete / done (uses your existing XP-cap calc)
-    if action == "delete":
-        deleted = 0
-        for tid in ids:
-            try: await delete_task(tid); deleted += 1
-            except: pass
-        await cb.message.answer(f"🗑 Deleted: {', '.join(map(str, indices))}  (total {deleted})")
-        await _show_tasks_list(cb, uid, (view.get("filter") or "all")); return
-
-    # done
-    requested = 0; count = 0
-    for tid in ids:
-        try:
-            t = await get_task_by_id(tid)
-            if not t: continue
-            base = 2; prio_bonus = {"low":0,"medium":2,"high":4}.get((t.priority or "low"),0); tag_bonus = 1 if "study" in (t.tags or "") else 0
-            requested += (base + prio_bonus + tag_bonus)
-            await mark_task_done(tid); count += 1
-        except: pass
-
-    applied, _ = await award_xp_with_cap(uid, requested_xp=requested, completed_delta=count, cap=XP_DAILY_CAP, tz_name="Asia/Tashkent")
-    if count == 0:
-        await cb.message.answer("Nothing changed.", reply_markup=main_kb())
-    elif applied == requested:
-        await cb.message.answer(f"✅ Done: {', '.join(map(str, indices))}  (+{applied} XP)")
-    elif applied > 0:
-        await cb.message.answer(f"✅ Done: {', '.join(map(str, indices))}  (+{applied} XP; {requested - applied} XP over daily cap {XP_DAILY_CAP})")
-    else:
-        await cb.message.answer(f"✅ Done: {', '.join(map(str, indices))}  (0 XP — daily cap {XP_DAILY_CAP}, resets at 00:00)")
-    await _show_tasks_list(cb, uid, (view.get("filter") or "all"))
-
 
 
 def _action_name(a: str) -> str:
@@ -1450,22 +1318,6 @@ async def cb_reject_group(cb: CallbackQuery):
         await cb.message.edit_text("❌ Group creation request rejected.")
     else:
         await cb.answer("Failed to reject.", show_alert=True)
-@dp.callback_query(F.data.startswith("group_page:"))
-async def group_page_cb(cb: CallbackQuery):
-    uid = str(cb.from_user.id)
-    page = int(cb.data.split(":")[1])
-    all_clans = [c for c in await get_all_clans() if c.is_approved]
-    if not all_clans:
-        return await cb.answer("No study groups exist yet.", show_alert=True)
-    total = len(all_clans)
-    page = page % total
-    user_group_page[uid] = page
-    try:
-        await cb.message.delete()
-    except:
-        pass
-    await show_group_card(cb.message, all_clans[page], page+1, total)
-    await cb.answer()
 
 
 
@@ -1501,17 +1353,6 @@ async def handle_edit_text(msg: Message):
     await update_task_text(tid, msg.text)
     await msg.answer("✅ Text updated!", reply_markup=main_kb())
 
-@dp.message(lambda m: str(m.from_user.id) in user_edit_deadline and m.text not in VALID_BUTTON_TEXTS)
-async def handle_edit_deadline(msg: Message):
-    uid = str(msg.from_user.id)
-    tid = user_edit_deadline.pop(uid)
-    text = msg.text.strip()
-    try:
-        datetime.strptime(text, "%Y-%m-%d %H:%M")
-        await update_task_deadline(tid, text)
-        await msg.answer(f"✅ Deadline set to <b>{text}</b>", reply_markup=main_kb())
-    except ValueError:
-        await msg.answer("⚠️ Wrong format—try <b>YYYY-MM-DD HH:MM</b>", reply_markup=main_kb())
 
 
 @dp.message(lambda m: str(m.from_user.id) in user_adding_task and m.text not in VALID_BUTTON_TEXTS)
@@ -2089,21 +1930,41 @@ async def admin_broadcast_start(msg: Message):
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_broadcast_wait)
 async def admin_broadcast_do(msg: Message):
+    # exit "waiting" mode
     admin_broadcast_wait.discard(msg.from_user.id)
+
     user_ids = await get_all_user_ids()
+    total = len(user_ids)
     sent = 0
-    for uid in user_ids:
+    failed = 0
+
+    # decide what to send once
+    is_photo = bool(msg.photo)
+    photo_id = msg.photo[-1].file_id if is_photo else None
+    text = (msg.caption or "") if is_photo else (msg.text or "")
+
+    for i, uid in enumerate(user_ids, start=1):
         try:
-            if msg.photo:
-                file_id = msg.photo[-1].file_id
-                await msg.bot.send_photo(uid, file_id, caption=msg.caption or "")
+            if is_photo:
+                await msg.bot.send_photo(uid, photo_id, caption=text)
             else:
-                await msg.bot.send_message(uid, msg.text or "")
+                await msg.bot.send_message(uid, text)
             sent += 1
-            await asyncio.sleep(0.03)  # be gentle
         except Exception:
-            await asyncio.sleep(0.03)
-    await msg.answer(f"✅ Broadcast sent to {sent}/{len(user_ids)} users.", reply_markup=admin_menu_kb())
+            failed += 1
+        finally:
+            # ~16–20 msgs/s is safe vs Telegram global limits
+            await asyncio.sleep(0.06)
+
+        # brief breather every 500 to dodge bursts
+        if i % 500 == 0:
+            await asyncio.sleep(1.0)
+
+    await msg.answer(
+        f"✅ Broadcast finished.\nSent: {sent}/{total}  •  Failed: {failed}",
+        reply_markup=admin_menu_kb()
+    )
+
 
 @dp.message(F.text == "➕ Add XP")
 async def admin_addxp_start(msg: Message):
@@ -2246,33 +2107,44 @@ async def admin_group_delete(cb: CallbackQuery):
         await cb.answer("Failed to delete", show_alert=True)
 
 
-# — Reminders Loop —
+
+# — Reminders Loop (SQL-filtered windows) —
 async def check_reminders():
     while True:
-        now = datetime.now(TASHKENT_TZ)
         try:
-            for usr, tasks in await get_all_users_with_tasks():
-                for t in tasks:
-                    if not t.deadline or t.status == "done":
-                        continue
+            # 1-hour window: [60, 61) minutes (catch the minute edge once)
+            pairs_1h = await get_tasks_for_reminder_window(60, 61, sent_flag=0, tz_name="Asia/Tashkent")
+            if pairs_1h:
+                ids = []
+                for usr, t in pairs_1h:
                     try:
-                        dl   = TASHKENT_TZ.localize(datetime.strptime(t.deadline, "%Y-%m-%d %H:%M"))
-                        diff = (dl - now).total_seconds()
-                        if 0 < diff <= 3600 and t.reminders_sent == 0:
-                            await bot.send_message(usr.id, f"⏰ 1h to go: {t.text}")
-                            t.reminders_sent = 1
-                            await update_task_reminders_sent(t.id, 1)
-                        elif 0 < diff <= 600 and t.reminders_sent == 1:
-                            await bot.send_message(usr.id, f"⚠️ 10m left: {t.text}")
-                            t.reminders_sent = 2
-                            await update_task_reminders_sent(t.id, 2)
-                    except:
-                        # parsing or timezone issues; skip this task
+                        await bot.send_message(usr.id, f"⏰ 1h to go: {t.text}")
+                        ids.append(t.id)
+                    except Exception:
                         pass
-        except Exception as e:
-            # log if you want: print(f"[reminder] error: {e}")
+                await bulk_update_task_reminders_sent(ids, 1)
+
+            # 10-minute window: [10, 11) minutes
+            pairs_10m = await get_tasks_for_reminder_window(10, 11, sent_flag=1, tz_name="Asia/Tashkent")
+            if pairs_10m:
+                ids = []
+                for usr, t in pairs_10m:
+                    try:
+                        await bot.send_message(usr.id, f"⚠️ 10m left: {t.text}")
+                        ids.append(t.id)
+                    except Exception:
+                        pass
+                await bulk_update_task_reminders_sent(ids, 2)
+
+        except Exception:
+            # optional: print or log
             pass
+
+        # tick every ~60s is enough
         await asyncio.sleep(60)
+
+
+
 # --- Groups leaderboard (🎐 Total / 🎏 Avg, spaced layout) ---
 
 @dp.callback_query(F.data == "noop")
