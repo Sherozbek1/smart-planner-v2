@@ -2,6 +2,7 @@ import asyncio
 import pytz
 import os
 import re
+from aiogram import BaseMiddleware
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -372,6 +373,23 @@ async def _show_tasks_list(msg_or_call, uid: str, filt: str):
             await msg_or_call.message.answer(text, reply_markup=kb)
 
 
+
+
+class EnsureUserMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        u = getattr(event, "from_user", None)
+        if u and u.id:
+            # this guarantees users row exists before ANY handler runs
+            await get_or_create_user(
+                str(u.id),
+                name=u.full_name or "Unknown",
+                username=u.username or ""
+            )
+        return await handler(event, data)
+
+# register once (after you create dp)
+dp.message.middleware(EnsureUserMiddleware())
+dp.callback_query.middleware(EnsureUserMiddleware())
 
 
 
