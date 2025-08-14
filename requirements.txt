@@ -1,5 +1,5 @@
-aiogram
-sqlalchemy
+aiogram>=3.4
+SQLAlchemy>=2.0
 asyncpg
 python-dotenv
 pytz

@@ -435,25 +435,13 @@ def _render_task_blocks(tasks):
 # — Handlers —  
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
-    # ensure a row exists + keep username fresh
     await get_or_create_user(
         str(msg.from_user.id),
         name=msg.from_user.full_name or "Unknown",
-        username=(msg.from_user.username or "")
+        username=msg.from_user.username or ""
     )
-
     await msg.answer(
-        "🚀 <b>Welcome to Smart Daily Planner V2!</b>\n"
-        "<i>Your productivity, now gamified — right inside Telegram.</i>\n\n"
-        "Here’s what you can do:\n"
-        "• ✍️ <b>Add tasks</b>\n"
-        "• ⏰ <b>Get reminders</b> exactly on time\n"
-        "• 📋 <b>Manage & organize</b> tasks with deadlines, tags, and priorities\n"
-        "• 🏆 <b>Climb the leaderboards</b> solo or with your Study Group\n"
-        "• 🎯 <b>Earn XP & streak bonuses</b>\n"
-        "• 👥 <b>Join Study Groups</b>\n\n"
-        "💡 <i>Tip: Use</i> /help <i>anytime for quick commands & examples.</i>\n\n"
-        "Let’s get started! Tap a button below ⤵️",
+        "🚀 Welcome! Use the menu below to get started.",
         reply_markup=main_kb()
     )
 
